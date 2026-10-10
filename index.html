@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SCRIPTFORGE — Luau para Delta</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>SCRIPTFORGE</h1>
+  <p class="sub">Gerador de Luau para executor Delta — roda 100% no browser.</p>
+</header>
+
+<main>
+  <section class="panel">
+    <label for="prompt">Descrição do script</label>
+    <textarea id="prompt" rows="4" placeholder="esp com box, nome e distância, toggle RightShift, team check"></textarea>
+
+    <div class="presets" id="presets"></div>
+
+    <div class="row">
+      <div>
+        <label for="backend">Backend</label>
+        <select id="backend">
+          <option value="openrouter">OpenRouter (padrão)</option>
+          <option value="ollama">Ollama (local)</option>
+          <option value="offline">Offline (templates)</option>
+        </select>
+      </div>
+      <div>
+        <label for="model">Modelo</label>
+        <select id="model"></select>
+      </div>
+    </div>
+
+    <div class="row" id="keyrow">
+      <div style="flex:1">
+        <label for="apikey">OpenRouter API key <small>(fica só no seu localStorage)</small></label>
+        <input id="apikey" type="password" placeholder="sk-or-v1-...">
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="gen">Gerar script</button>
+      <button id="copy" class="ghost">Copiar</button>
+      <button id="dl" class="ghost">Baixar .lua</button>
+    </div>
+
+    <div id="status" class="status"></div>
+  </section>
+
+  <section class="panel output">
+    <div class="outhead">
+      <span id="outname">saida.lua</span>
+      <span id="outmeta"></span>
+    </div>
+    <pre><code id="out">-- o script aparece aqui --</code></pre>
+  </section>
+</main>
+
+<footer>
+  <span>HTML estático · hospeda em GitHub Pages · sem servidor</span>
+</footer>
+
+<script src="templates.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
