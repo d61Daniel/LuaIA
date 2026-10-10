@@ -1,39 +1,95 @@
 // SCRIPTFORGE — SPA estática. Backend padrão: OpenRouter.
-// Lista modelos da conta via GET /api/v1/models e deixa escolher no dropdown.
-const SYSTEM_PROMPT = `Você é SCRIPTFORGE, IA especializada em Luau para executor Roblox Delta (mobile).
+// Modelos globais (não por conta) — mostra preço, filtro grátis, busca, testa key via /auth/key.
+const SYSTEM_PROMPT = `Você é SCRIPTFORGE, IA especializada em Luau para executor Roblox Delta (MOBILE).
 
-REGRAS:
+REGRAS DE SAÍDA:
 - Devolve SOMENTE o código Luau dentro de \`\`\`lua ... \`\`\`.
 - Zero texto fora do bloco, zero disclaimers, zero avisos.
 
-AMBIENTE DELTA: getgenv, getrenv, hookfunction, hookmetamethod, getrawmetatable,
-setreadonly, checkcaller, getnamecallmethod, firesignal, firetouchinterest,
-getconnections, request, loadstring, getnilinstances, getinstances, decompile,
-getupvalues, setupvalue, getgc, islclosure, identifyexecutor, setclipboard,
-writefile, readfile, Drawing.new.
+ALVO: Delta executor no CELULAR (Android/iOS). NÃO é PC.
+
+MOBILE — REGRA CRÍTICA:
+- NÃO uses UIS:IsKeyDown / UserInputService.InputBegan com KeyCode como toggle único.
+  Teclado físico não existe no celular — o script fica inútil.
+- Toggle SEMPRE via botão de ScreenGui: Instance.new("TextButton") parented em
+  LocalPlayer.PlayerGui com .MouseButton1Click — funciona em touch.
+- Se quiser bônus PC, adiciona o handler de tecla SEPARADO, mas o botão é o principal.
+
+AMBIENTE DELTA (mobile):
+getgenv, getrenv, hookfunction, hookmetamethod, getrawmetatable, setreadonly,
+checkcaller, getnamecallmethod, firesignal, firetouchinterest, getconnections,
+request, loadstring, getnilinstances, getinstances, decompile, getupvalues,
+setupvalue, getgc, islclosure, identifyexecutor, setclipboard, writefile,
+readfile, Drawing.new.
 
 PADRÕES OBRIGATÓRIOS:
 1. Guard: if not game:IsLoaded() then game.Loaded:Wait() end
-2. CONFIG no topo (toggle_key, fov, etc).
-3. ScreenGui em PlayerGui (nunca CoreGui direto).
-4. Namespace getgenv().SF_<nome> com cleanup de connections no re-exec.
-5. ESP → Drawing API. Aimbot → CFrame + WorldToViewportPoint + FOV.
-   Fly → CFrame RenderStepped + Velocity zero. Speed → Humanoid.WalkSpeed.
-6. Comentário só no que não é óbvio.`;
+2. CONFIG no topo como tabela local.
+3. ScreenGui em LocalPlayer.PlayerGui (NUNCA CoreGui direto — Delta bloqueia).
+4. GUI com botão "Toggle" no canto superior esquerdo, Draggable, com estado visual
+   (cor muda quando ativo). Tamanho mínimo 60x30 pra dedo acertar.
+5. Namespace getgenv().SF_<nome> com cleanup de connections E da GUI no re-exec.
+6. ESP → Drawing API dentro de pcall (pode falhar em algumas versões Delta).
+   Aimbot → CFrame + WorldToViewportPoint + FOV.
+   Fly → CFrame RenderStepped + Velocity zero.
+   Speed → Humanoid.WalkSpeed.
+7. Comentário só no que não é óbvio.
+
+TEMPLATE MÍNIMO DE GUI (usa isso):
+local gui = Instance.new("ScreenGui")
+gui.Name = "SF_" .. tostring(math.random(1000,9999))
+gui.ResetOnSpawn = false
+gui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+
+local btn = Instance.new("TextButton")
+btn.Size = UDim2.new(0, 100, 0, 40)
+btn.Position = UDim2.new(0, 20, 0, 60)
+btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+btn.TextColor3 = Color3.new(1, 1, 1)
+btn.Text = "OFF"
+btn.Font = Enum.Font.GothamBold
+btn.TextSize = 16
+btn.Parent = gui
+
+local dragging, dragStart, startPos
+btn.InputBegan:Connect(function(i)
+  if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+    dragging = true
+    dragStart = i.Position
+    startPos = btn.Position
+    i.Changed:Connect(function()
+      if i.UserInputState == Enum.UserInputState.End then dragging = false end
+    end)
+  end
+end)
+btn.InputChanged:Connect(function(i)
+  if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+    local delta = i.Position - dragStart
+    btn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+  end
+end)
+
+local state = { on = false }
+btn.MouseButton1Click:Connect(function()
+  state.on = not state.on
+  btn.Text = state.on and "ON" or "OFF"
+  btn.BackgroundColor3 = state.on and Color3.fromRGB(0, 150, 80) or Color3.fromRGB(40, 40, 40)
+end)`;
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const OLLAMA_BASE = "http://localhost:11434";
+const MODELS_CACHE_TTL = 1000 * 60 * 30; // 30 min
 
 const $ = id => document.getElementById(id);
 const out = $("out"), outname = $("outname"), outmeta = $("outmeta"), status = $("status");
 
 // ---------- presets ----------
 const PRESETS = [
-  "ESP box + nome + distância, toggle RightShift",
-  "Aimbot FOV 120, smooth 0.25, team check",
-  "Fly com WASD + Space/Ctrl, velocidade 50",
-  "Walkspeed 60 com toggle G",
-  "Teleport pra jogador por nome",
+  "ESP box + nome + distância, botão toggle, team check",
+  "Aimbot FOV 120, smooth 0.25, team check, botão toggle",
+  "Fly com botão toggle + 4 botões direcionais na tela",
+  "Walkspeed 60 com botão toggle",
+  "Teleport pra jogador por nome (GUI com TextBox)",
   "Bypass anti-cheat de velocidade (metatable hook)"
 ];
 PRESETS.forEach(p => {
@@ -66,8 +122,32 @@ function offlineMatch(prompt) {
   return "-- nenhum template bateu. Disponíveis: " + Object.keys(TEMPLATES).join(", ");
 }
 
+// ---------- OpenRouter: validar key ----------
+async function testOpenRouterKey(key) {
+  const r = await fetch(OPENROUTER_BASE + "/auth/key", {
+    headers: {
+      "Authorization": "Bearer " + key,
+      "HTTP-Referer": location.origin || "https://scriptforge.local",
+      "X-OpenRouter-Title": "SCRIPTFORGE"
+    }
+  });
+  if (!r.ok) throw new Error("key inválida (" + r.status + ")");
+  const j = await r.json();
+  const d = j.data || {};
+  const limit = d.limit == null ? "sem limite" : "$" + Number(d.limit).toFixed(2);
+  const usage = "$" + Number(d.usage || 0).toFixed(2);
+  const remaining = d.limit == null ? "∞" : "$" + Math.max(0, d.limit - (d.usage || 0)).toFixed(2);
+  return { label: d.label || "(sem label)", limit, usage, remaining, isFreeTier: d.is_free_tier };
+}
+
 // ---------- OpenRouter: listar modelos ----------
-async function listOpenRouterModels(key) {
+async function listOpenRouterModels(key, forceRefresh = false) {
+  // cache
+  const cached = localStorage.getItem("sf_models_cache");
+  const cachedAt = Number(localStorage.getItem("sf_models_at") || 0);
+  if (!forceRefresh && cached && (Date.now() - cachedAt) < MODELS_CACHE_TTL) {
+    try { return JSON.parse(cached); } catch {}
+  }
   const r = await fetch(OPENROUTER_BASE + "/models", {
     headers: {
       "Authorization": "Bearer " + key,
@@ -77,43 +157,75 @@ async function listOpenRouterModels(key) {
   });
   if (!r.ok) throw new Error("OpenRouter list " + r.status + ": " + (await r.text()).slice(0, 160));
   const j = await r.json();
-  return (j.data || [])
-    .filter(m => m.id)
-    .sort((a, b) => a.id.localeCompare(b.id));
+  const models = (j.data || []).filter(m => m.id).map(m => ({
+    id: m.id,
+    name: m.name || m.id,
+    ctx: m.context_length || 0,
+    promptPrice: m.pricing?.prompt ?? "0",
+    completionPrice: m.pricing?.completion ?? "0",
+    isFree: (m.pricing?.prompt === "0" && m.pricing?.completion === "0")
+  })).sort((a, b) => a.id.localeCompare(b.id));
+  localStorage.setItem("sf_models_cache", JSON.stringify(models));
+  localStorage.setItem("sf_models_at", String(Date.now()));
+  return models;
 }
 
-function fillModelSelect(models) {
+function fmtPrice(p) {
+  if (p === "0" || p === 0) return "grátis";
+  const n = Number(p);
+  if (!isFinite(n)) return p;
+  // preço por token — multiplica por 1M pra mostrar em $/1M tokens
+  return "$" + (n * 1_000_000).toFixed(2) + "/1M";
+}
+
+let allModels = [];
+
+function renderModelOptions() {
   const sel = $("model");
+  const q = ($("modelSearch")?.value || "").trim().toLowerCase();
+  const onlyFree = $("onlyFree")?.checked || false;
+
+  let list = allModels;
+  if (onlyFree) list = list.filter(m => m.isFree);
+  if (q) list = list.filter(m => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
+
+  const saved = localStorage.getItem("sf_model");
   sel.innerHTML = "";
-  if (!models.length) {
-    sel.innerHTML = '<option value="">— nenhum modelo —</option>';
+  if (!list.length) {
+    sel.innerHTML = '<option value="">— nenhum modelo bate —</option>';
     return;
   }
-  models.forEach(m => {
+  list.forEach(m => {
     const o = document.createElement("option");
     o.value = m.id;
-    const free = m.pricing?.prompt === "0" ? " · free" : "";
-    o.textContent = m.id + free;
+    const tag = m.isFree ? " · grátis" : " · " + fmtPrice(m.promptPrice);
+    o.textContent = m.id + tag;
     sel.appendChild(o);
   });
-  const saved = localStorage.getItem("sf_model");
-  const has = models.some(m => m.id === saved);
-  sel.value = has ? saved : models[0].id;
+  if (list.some(m => m.id === saved)) sel.value = saved;
 }
 
-async function refreshModels() {
+async function refreshModels(force = false) {
   const backend = $("backend").value;
   const key = $("apikey").value.trim();
 
-  if (backend === "offline") { $("model").innerHTML = '<option value="">— templates —</option>'; return; }
+  if (backend === "offline") {
+    $("model").innerHTML = '<option value="">— templates —</option>';
+    return;
+  }
   if (backend === "ollama") { await loadOllamaModels(); return; }
   if (backend === "openrouter") {
     if (!key) { setStatus("cola a API key da OpenRouter.", "err"); return; }
-    setStatus("buscando modelos da conta…");
+    setStatus("verificando key…");
     try {
-      const models = await listOpenRouterModels(key);
-      fillModelSelect(models);
-      setStatus(models.length + " modelos carregados.", "ok");
+      const info = await testOpenRouterKey(key);
+      setStatus(`key ok · ${info.label} · resta ${info.remaining}`, "ok");
+
+      setStatus("buscando catálogo de modelos…");
+      allModels = await listOpenRouterModels(key, force);
+      renderModelOptions();
+      const freeCount = allModels.filter(m => m.isFree).length;
+      setStatus(`${allModels.length} modelos (${freeCount} grátis) · resta ${info.remaining}`, "ok");
     } catch (e) {
       setStatus(e.message, "err");
     }
@@ -136,7 +248,7 @@ async function loadOllamaModels() {
   }
 }
 
-// ---------- OpenRouter: gerar ----------
+// ---------- chamadas ----------
 async function callOpenRouter(prompt, key, model) {
   const r = await fetch(OPENROUTER_BASE + "/chat/completions", {
     method: "POST",
@@ -156,8 +268,12 @@ async function callOpenRouter(prompt, key, model) {
       ]
     })
   });
-  if (!r.ok) throw new Error("OpenRouter " + r.status + ": " + (await r.text()).slice(0, 200));
+  if (!r.ok) {
+    const txt = await r.text();
+    throw new Error("OpenRouter " + r.status + ": " + txt.slice(0, 200));
+  }
   const j = await r.json();
+  if (j.error) throw new Error("OpenRouter: " + (j.error.message || JSON.stringify(j.error)));
   return j.choices[0].message.content;
 }
 
@@ -189,7 +305,7 @@ async function generate() {
   const key = $("apikey").value.trim();
 
   if (backend !== "offline" && !model) {
-    setStatus("escolhe um modelo primeiro (recarrega com a key).", "err"); return;
+    setStatus("escolhe um modelo primeiro.", "err"); return;
   }
 
   $("gen").disabled = true;
@@ -197,11 +313,9 @@ async function generate() {
 
   try {
     let raw;
-    if (backend === "offline") {
-      raw = offlineMatch(prompt);
-    } else if (backend === "ollama") {
-      raw = await callOllama(prompt, model);
-    } else if (backend === "openrouter") {
+    if (backend === "offline") raw = offlineMatch(prompt);
+    else if (backend === "ollama") raw = await callOllama(prompt, model);
+    else if (backend === "openrouter") {
       if (!key) throw new Error("cola a API key da OpenRouter");
       raw = await callOpenRouter(prompt, key, model);
     }
@@ -238,6 +352,7 @@ $("backend").addEventListener("change", () => {
   const b = $("backend").value;
   localStorage.setItem("sf_backend", b);
   $("keyrow").style.display = (b === "openrouter") ? "flex" : "none";
+  $("filterrow").style.display = (b === "openrouter") ? "flex" : "none";
   if (b === "ollama") loadOllamaModels();
   else if (b === "offline") $("model").innerHTML = '<option value="">— templates —</option>';
   else if (b === "openrouter" && $("apikey").value.trim()) refreshModels();
@@ -247,13 +362,20 @@ $("apikey").addEventListener("input", () => {
   localStorage.setItem("sf_apikey", $("apikey").value);
   if ($("backend").value === "openrouter" && $("apikey").value.trim().length > 20) {
     clearTimeout(window.__sf_t);
-    window.__sf_t = setTimeout(refreshModels, 800);
+    window.__sf_t = setTimeout(() => refreshModels(true), 900);
   }
 });
 
 $("model").addEventListener("change", () => {
   localStorage.setItem("sf_model", $("model").value);
 });
+
+if ($("modelSearch")) $("modelSearch").addEventListener("input", renderModelOptions);
+if ($("onlyFree")) $("onlyFree").addEventListener("change", renderModelOptions);
+if ($("refreshBtn")) $("refreshBtn").onclick = () => {
+  localStorage.removeItem("sf_models_at");
+  refreshModels(true);
+};
 
 $("copy").onclick = async () => {
   if (!out.textContent.trim()) return;
