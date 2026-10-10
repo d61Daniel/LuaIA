@@ -9,7 +9,7 @@ REGRAS DE SAÍDA:
 ALVO: Delta executor no CELULAR (Android/iOS). NÃO é PC.
 
 MOBILE — REGRA CRÍTICA:
-- NÃO uses UIS:IsKeyDown / UserInputService.InputBegan com KeyCode como toggle único.
+- NÃO uses UserInputService.IsKeyDown / InputBegan com KeyCode como toggle único.
   Teclado físico não existe no celular — o script fica inútil.
 - Toggle SEMPRE via botão de ScreenGui: Instance.new("TextButton") parented em
   LocalPlayer.PlayerGui com .MouseButton1Click — funciona em touch.
@@ -27,7 +27,7 @@ PADRÕES OBRIGATÓRIOS:
 2. CONFIG no topo como tabela local.
 3. ScreenGui em LocalPlayer.PlayerGui (NUNCA CoreGui direto — Delta bloqueia).
 4. GUI com botão "Toggle" no canto superior esquerdo, Draggable, com estado visual
-   (cor muda quando ativo). Tamanho mínimo 60x30 pra dedo acertar.
+   (cor muda quando ativo). Tamanho mínimo 100x40 pra dedo acertar.
 5. Namespace getgenv().SF_<nome> com cleanup de connections E da GUI no re-exec.
 6. ESP → Drawing API dentro de pcall (pode falhar em algumas versões Delta).
    Aimbot → CFrame + WorldToViewportPoint + FOV.
@@ -42,7 +42,7 @@ gui.ResetOnSpawn = false
 gui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
 
 local btn = Instance.new("TextButton")
-btn.Size = UDim2.new(0, 100, 0, 40)
+btn.Size = UDim2.new(0, 120, 0, 44)
 btn.Position = UDim2.new(0, 20, 0, 60)
 btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 btn.TextColor3 = Color3.new(1, 1, 1)
@@ -78,12 +78,11 @@ end)`;
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const OLLAMA_BASE = "http://localhost:11434";
-const MODELS_CACHE_TTL = 1000 * 60 * 30; // 30 min
+const MODELS_CACHE_TTL = 1000 * 60 * 30;
 
 const $ = id => document.getElementById(id);
 const out = $("out"), outname = $("outname"), outmeta = $("outmeta"), status = $("status");
 
-// ---------- presets ----------
 const PRESETS = [
   "ESP box + nome + distância, botão toggle, team check",
   "Aimbot FOV 120, smooth 0.25, team check, botão toggle",
@@ -99,19 +98,16 @@ PRESETS.forEach(p => {
   $("presets").appendChild(el);
 });
 
-// ---------- persistência ----------
 ["backend", "model", "apikey"].forEach(k => {
   const v = localStorage.getItem("sf_" + k);
   if (v) $(k).value = v;
 });
 
-// ---------- extraction ----------
 function extractLua(text) {
   const m = text.match(/```(?:lua|luau)?\s*\n([\s\S]*?)```/);
   return m ? m[1].trim() : text.trim();
 }
 
-// ---------- offline matcher ----------
 function offlineMatch(prompt) {
   const p = prompt.toLowerCase();
   if (/esp|box|nome|dist/.test(p)) return TEMPLATES.esp;
@@ -122,7 +118,6 @@ function offlineMatch(prompt) {
   return "-- nenhum template bateu. Disponíveis: " + Object.keys(TEMPLATES).join(", ");
 }
 
-// ---------- OpenRouter: validar key ----------
 async function testOpenRouterKey(key) {
   const r = await fetch(OPENROUTER_BASE + "/auth/key", {
     headers: {
@@ -140,9 +135,7 @@ async function testOpenRouterKey(key) {
   return { label: d.label || "(sem label)", limit, usage, remaining, isFreeTier: d.is_free_tier };
 }
 
-// ---------- OpenRouter: listar modelos ----------
 async function listOpenRouterModels(key, forceRefresh = false) {
-  // cache
   const cached = localStorage.getItem("sf_models_cache");
   const cachedAt = Number(localStorage.getItem("sf_models_at") || 0);
   if (!forceRefresh && cached && (Date.now() - cachedAt) < MODELS_CACHE_TTL) {
@@ -174,7 +167,6 @@ function fmtPrice(p) {
   if (p === "0" || p === 0) return "grátis";
   const n = Number(p);
   if (!isFinite(n)) return p;
-  // preço por token — multiplica por 1M pra mostrar em $/1M tokens
   return "$" + (n * 1_000_000).toFixed(2) + "/1M";
 }
 
@@ -220,7 +212,6 @@ async function refreshModels(force = false) {
     try {
       const info = await testOpenRouterKey(key);
       setStatus(`key ok · ${info.label} · resta ${info.remaining}`, "ok");
-
       setStatus("buscando catálogo de modelos…");
       allModels = await listOpenRouterModels(key, force);
       renderModelOptions();
@@ -248,7 +239,6 @@ async function loadOllamaModels() {
   }
 }
 
-// ---------- chamadas ----------
 async function callOpenRouter(prompt, key, model) {
   const r = await fetch(OPENROUTER_BASE + "/chat/completions", {
     method: "POST",
@@ -295,7 +285,6 @@ async function callOllama(prompt, model) {
   return j.message.content;
 }
 
-// ---------- main ----------
 async function generate() {
   const prompt = $("prompt").value.trim();
   if (!prompt) { setStatus("dá uma descrição primeiro.", "err"); return; }
@@ -342,7 +331,6 @@ function setStatus(msg, cls = "") {
   status.className = "status " + cls;
 }
 
-// ---------- eventos ----------
 $("gen").onclick = generate;
 $("prompt").addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") generate();
@@ -393,6 +381,5 @@ $("dl").onclick = () => {
   URL.revokeObjectURL(a.href);
 };
 
-// init
 $("backend").value = localStorage.getItem("sf_backend") || "openrouter";
 $("backend").dispatchEvent(new Event("change"));
